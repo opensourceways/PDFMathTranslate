@@ -3,6 +3,7 @@ import cgi
 import os
 import shutil
 import uuid
+import time
 from asyncio import CancelledError
 from pathlib import Path
 
@@ -96,38 +97,6 @@ def verify_recaptcha(response):
     print("reCAPTCHA", result.get("success"))
     return result.get("success")
 
-
-def download_with_limit(url: str, save_path: str, size_limit: int) -> str:
-    """
-    This function downloads a file from a URL and saves it to a specified path.
-
-    Inputs:
-        - url: The URL to download the file from
-        - save_path: The path to save the file to
-        - size_limit: The maximum size of the file to download
-
-    Returns:
-        - The path of the downloaded file
-    """
-    chunk_size = 1024
-    total_size = 0
-    with requests.get(url, stream=True, timeout=10) as response:
-        response.raise_for_status()
-        content = response.headers.get("Content-Disposition")
-        try:  # filename from header
-            _, params = cgi.parse_header(content)
-            filename = params["filename"]
-        except Exception:  # filename from url
-            filename = os.path.basename(url)
-        with open(save_path / filename, "wb") as file:
-            for chunk in response.iter_content(chunk_size=chunk_size):
-                total_size += len(chunk)
-                if size_limit and total_size > size_limit:
-                    raise gr.Error("Exceeds file size limit")
-                file.write(chunk)
-    return save_path / filename
-
-
 def stop_translate_file(state: dict) -> None:
     """
     This function stops the translation process.
@@ -146,8 +115,7 @@ def stop_translate_file(state: dict) -> None:
 
 def translate_file(
     file_type,
-    file_input,
-    link_input,
+    file_input, 
     service,
     lang_from,
     lang_to,
@@ -193,24 +161,16 @@ def translate_file(
     # Translate PDF content using selected service.
     if flag_demo and not verify_recaptcha(recaptcha_response):
         raise gr.Error("reCAPTCHA fail")
-
+    
+    start_time = time.time()
     progress(0, desc="Starting translation...")
 
     output = Path("pdf2zh_files")
     output.mkdir(parents=True, exist_ok=True)
 
-    if file_type == "File":
-        if not file_input:
-            raise gr.Error("No input")
-        file_path = shutil.copy(file_input, output)
-    else:
-        if not link_input:
-            raise gr.Error("No input")
-        file_path = download_with_limit(
-            link_input,
-            output,
-            5 * 1024 * 1024 if flag_demo else None,
-        )
+    if not file_input:
+        raise gr.Error("No input")
+    file_path = shutil.copy(file_input, output)
 
     filename = os.path.splitext(os.path.basename(file_path))[0]
     file_raw = output / f"{filename}.pdf"
@@ -271,6 +231,10 @@ def translate_file(
         raise gr.Error("No output")
 
     progress(1.0, desc="Translation complete!")
+
+    end_time = time.time()
+    cost_time = end_time - start_time
+    print(f"Translation took {cost_time:.2f} seconds.")
 
     return (
         str(file_mono),
@@ -360,7 +324,7 @@ with gr.Blocks(
         with gr.Column(scale=1):
             gr.Markdown("## File | < 5 MB" if flag_demo else "## File")
             file_type = gr.Radio(
-                choices=["File", "Link"],
+                choices=["File"],
                 label="Type",
                 value="File",
             )
@@ -370,11 +334,6 @@ with gr.Blocks(
                 file_types=[".pdf"],
                 type="filepath",
                 elem_classes=["input-file"],
-            )
-            link_input = gr.Textbox(
-                label="Link",
-                visible=False,
-                interactive=True,
             )
             gr.Markdown("## Option")
             service = gr.Dropdown(
@@ -436,12 +395,6 @@ with gr.Blocks(
                 _envs[-1] = gr.update(visible=translator.CustomPrompt)
                 return _envs
 
-            def on_select_filetype(file_type):
-                return (
-                    gr.update(visible=file_type == "File"),
-                    gr.update(visible=file_type == "Link"),
-                )
-
             def on_select_page(choice):
                 if choice == "Others":
                     return gr.update(visible=True)
@@ -470,26 +423,6 @@ with gr.Blocks(
                 on_select_service,
                 service,
                 envs,
-            )
-            file_type.select(
-                on_select_filetype,
-                file_type,
-                [file_input, link_input],
-                js=(
-                    f"""
-                    (a,b)=>{{
-                        try{{
-                            grecaptcha.render('recaptcha-box',{{
-                                'sitekey':'{client_key}',
-                                'callback':'onVerify'
-                            }});
-                        }}catch(error){{}}
-                        return [a];
-                    }}
-                    """
-                    if flag_demo
-                    else ""
-                ),
             )
 
         with gr.Column(scale=2):
@@ -525,7 +458,6 @@ with gr.Blocks(
         inputs=[
             file_type,
             file_input,
-            link_input,
             service,
             lang_from,
             lang_to,
