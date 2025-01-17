@@ -317,7 +317,7 @@ with gr.Blocks(
     head=demo_recaptcha if flag_demo else "",
 ) as demo:
     gr.Markdown(
-        "# [在线pdf论文翻译工具](https://github.com/opensourceways/PDFMathTranslate)"
+        "# [在线PDF论文翻译工具](https://github.com/opensourceways/PDFMathTranslate)"
     )
 
     with gr.Row():
