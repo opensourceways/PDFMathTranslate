@@ -3,6 +3,7 @@ import cgi
 import os
 import shutil
 import uuid
+import time
 from asyncio import CancelledError
 from pathlib import Path
 
@@ -196,7 +197,8 @@ def translate_file(
     # Translate PDF content using selected service.
     if flag_demo and not verify_recaptcha(recaptcha_response):
         raise gr.Error("reCAPTCHA fail")
-
+    
+    start_time = time.time()
     progress(0, desc="Starting translation...")
 
     output = Path("pdf2zh_files")
@@ -274,6 +276,10 @@ def translate_file(
         raise gr.Error("No output")
 
     progress(1.0, desc="Translation complete!")
+
+    end_time = time.time()
+    cost_time = end_time - start_time
+    print(f"Translation took {cost_time:.2f} seconds.")
 
     return (
         str(file_mono),
