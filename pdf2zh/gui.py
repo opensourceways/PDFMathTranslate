@@ -3,14 +3,17 @@ import cgi
 import os
 import shutil
 import uuid
+import time
 from asyncio import CancelledError
 from pathlib import Path
+
 
 import gradio as gr
 import requests
 import tqdm
 from gradio_pdf import PDF
 from string import Template
+
 
 from pdf2zh import __version__
 from pdf2zh.high_level import translate
@@ -41,30 +44,14 @@ from pdf2zh.translator import (
     OpenAIlikedTranslator,
 )
 
+
 # The following variables associate strings with translators
 service_map: dict[str, BaseTranslator] = {
     "Google": GoogleTranslator,
     "Bing": BingTranslator,
-    "DeepL": DeepLTranslator,
-    "DeepLX": DeepLXTranslator,
-    "Ollama": OllamaTranslator,
-    "Xinference": XinferenceTranslator,
-    "AzureOpenAI": AzureOpenAITranslator,
-    "OpenAI": OpenAITranslator,
-    "Zhipu": ZhipuTranslator,
-    "ModelScope": ModelScopeTranslator,
-    "Silicon": SiliconTranslator,
-    "Gemini": GeminiTranslator,
-    "Azure": AzureTranslator,
-    "Tencent": TencentTranslator,
-    "Dify": DifyTranslator,
-    "AnythingLLM": AnythingLLMTranslator,
-    "Argos Translate": ArgosTranslator,
-    "Gork": GorkTranslator,
-    "Groq": GroqTranslator,
-    "DeepSeek": DeepseekTranslator,
     "OpenAI-liked": OpenAIlikedTranslator,
 }
+
 
 # The following variables associate strings with specific languages
 lang_map = {
@@ -80,6 +67,7 @@ lang_map = {
     "Italian": "it",
 }
 
+
 # The following variable associate strings with page ranges
 page_map = {
     "All": None,
@@ -88,8 +76,10 @@ page_map = {
     "Others": None,
 }
 
+
 # Check if this is a public demo, which has resource limits
 flag_demo = False
+
 
 # Limit resources
 if ConfigManager.get("PDF2ZH_DEMO"):
@@ -122,10 +112,12 @@ def download_with_limit(url: str, save_path: str, size_limit: int) -> str:
     """
     This function downloads a file from a URL and saves it to a specified path.
 
+
     Inputs:
         - url: The URL to download the file from
         - save_path: The path to save the file to
         - size_limit: The maximum size of the file to download
+
 
     Returns:
         - The path of the downloaded file
@@ -153,8 +145,10 @@ def stop_translate_file(state: dict) -> None:
     """
     This function stops the translation process.
 
+
     Inputs:
         - state: The state of the translation process
+
 
     Returns:- None
     """
@@ -184,6 +178,7 @@ def translate_file(
     """
     This function translates a PDF file from one language to another.
 
+
     Inputs:
         - file_type: The type of file to translate
         - file_input: The file to translate
@@ -200,6 +195,7 @@ def translate_file(
         - progress: The progress bar
         - envs: The environment variables
 
+
     Returns:
         - The translated file
         - The translated file
@@ -214,7 +210,8 @@ def translate_file(
     # Translate PDF content using selected service.
     if flag_demo and not verify_recaptcha(recaptcha_response):
         raise gr.Error("reCAPTCHA fail")
-
+    
+    start_time = time.time()
     progress(0, desc="Starting translation...")
 
     output = Path("pdf2zh_files")
@@ -233,10 +230,12 @@ def translate_file(
             5 * 1024 * 1024 if flag_demo else None,
         )
 
+
     filename = os.path.splitext(os.path.basename(file_path))[0]
     file_raw = output / f"{filename}.pdf"
     file_mono = output / f"{filename}-mono.pdf"
     file_dual = output / f"{filename}-dual.pdf"
+
 
     translator = service_map[service]
     if page_range != "Others":
@@ -254,12 +253,14 @@ def translate_file(
 
     _envs = {}
     for i, env in enumerate(translator.envs.items()):
+        print(f"Env: {env[0]}, envs[i]: {envs[i]},")
         _envs[env[0]] = envs[i]
 
     print(f"Files before translation: {os.listdir(output)}")
 
     def progress_bar(t: tqdm.tqdm):
         progress(t.n / t.total, desc="Translating...")
+
 
     try:
         threads = int(threads)
@@ -277,7 +278,7 @@ def translate_file(
         "callback": progress_bar,
         "cancellation_event": cancellation_event_map[session_id],
         "envs": _envs,
-        "prompt": Template(prompt),
+        "prompt": Template(prompt) if prompt else None,
         "model": ModelInstance.value,
     }
     try:
@@ -292,6 +293,10 @@ def translate_file(
 
     progress(1.0, desc="Translation complete!")
 
+    end_time = time.time()
+    cost_time = end_time - start_time
+    print(f"Translation took {cost_time:.2f} seconds.")
+
     return (
         str(file_mono),
         str(file_mono),
@@ -300,7 +305,6 @@ def translate_file(
         gr.update(visible=True),
         gr.update(visible=True),
     )
-
 
 # Global setup
 custom_blue = gr.themes.Color(
@@ -323,24 +327,29 @@ custom_css = """
     .env-warning {color: #dd5500 !important;}
     .env-success {color: #559900 !important;}
 
+
     /* Add dashed border to input-file class */
     .input-file {
         border: 1.2px dashed #165DFF !important;
         border-radius: 6px !important;
     }
 
+
     .progress-bar-wrap {
         border-radius: 8px !important;
     }
+
 
     .progress-bar {
         border-radius: 8px !important;
     }
 
+
     .pdf-canvas canvas {
         width: 100%;
     }
     """
+
 
 demo_recaptcha = """
     <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
@@ -355,8 +364,9 @@ demo_recaptcha = """
 
 tech_details_string = f"""
                     <summary>Technical details</summary>
-                    - GitHub: <a href="https://github.com/Byaidu/PDFMathTranslate">Byaidu/PDFMathTranslate</a><br>
-                    - GUI by: <a href="https://github.com/reycn">Rongxin</a><br>
+                    - GitHub: <a href="https://github.com/opensourceways/PDFMathTranslate">opensourceways/PDFMathTranslate</a><br>
+                    - 问题接口: <a>陶祎玮(t30073536)</a><br>
+                    - 建议反馈: <a>蒋龙(j00601018)</a><br>
                     - Version: {__version__}
                 """
 cancellation_event_map = {}
@@ -372,8 +382,9 @@ with gr.Blocks(
     head=demo_recaptcha if flag_demo else "",
 ) as demo:
     gr.Markdown(
-        "# [PDFMathTranslate @ GitHub](https://github.com/Byaidu/PDFMathTranslate)"
+        "# [在线pdf论文翻译工具](https://github.com/opensourceways/PDFMathTranslate)"
     )
+
 
     with gr.Row():
         with gr.Column(scale=1):
@@ -426,6 +437,7 @@ with gr.Blocks(
                 value=list(page_map.keys())[0],
             )
 
+
             page_input = gr.Textbox(
                 label="Page range",
                 visible=False,
@@ -449,12 +461,13 @@ with gr.Blocks(
                     _envs.append(gr.update(visible=False, value=""))
                 for i, env in enumerate(translator.envs.items()):
                     _envs[i] = gr.update(
-                        visible=True,
+                        visible=False,
                         label=env[0],
                         value=ConfigManager.get_env_by_translatername(
                             translator, env[0], env[1]
                         ),
                     )
+                    print(f"Env: {env[0]}, value: {os.getenv(env[0], env[1])},")
                 _envs[-1] = gr.update(visible=translator.CustomPrompt)
                 return _envs
 
@@ -514,9 +527,11 @@ with gr.Blocks(
                 ),
             )
 
+
         with gr.Column(scale=2):
             gr.Markdown("## Preview")
             preview = PDF(label="Document Preview", visible=True, height=2000)
+
 
     # Event handlers
     file_input.upload(
@@ -579,6 +594,7 @@ def parse_user_passwd(file_path: str) -> tuple:
     """
     Parse the user name and password from the file.
 
+
     Inputs:
         - file_path: The file path to read.
     Outputs:
@@ -611,9 +627,11 @@ def setup_gui(
     """
     Setup the GUI with the given parameters.
 
+
     Inputs:
         - share: Whether to share the GUI.
         - auth_file: The file path to read the user name and password.
+
 
     Outputs:
         - None
@@ -688,7 +706,7 @@ def setup_gui(
                         server_port=server_port,
                     )
 
-
 # For auto-reloading while developing
 if __name__ == "__main__":
     setup_gui()
+    
