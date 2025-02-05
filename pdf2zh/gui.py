@@ -11,10 +11,12 @@ import gradio as gr
 import requests
 import tqdm
 from gradio_pdf import PDF
+from string import Template
 
 from pdf2zh import __version__
 from pdf2zh.high_level import translate
-from pdf2zh.pdf2zh import model
+from pdf2zh.doclayout import ModelInstance
+from pdf2zh.config import ConfigManager
 from pdf2zh.translator import (
     AnythingLLMTranslator,
     AzureOpenAITranslator,
@@ -35,6 +37,7 @@ from pdf2zh.translator import (
     XinferenceTranslator,
     ZhipuTranslator,
     GorkTranslator,
+    GroqTranslator,
     DeepseekTranslator,
     OpenAIlikedTranslator,
 )
@@ -72,7 +75,7 @@ page_map = {
 flag_demo = False
 
 # Limit resources
-if os.getenv("PDF2ZH_DEMO"):
+if ConfigManager.get("PDF2ZH_DEMO"):
     flag_demo = True
     service_map = {
         "Google": GoogleTranslator,
@@ -81,8 +84,8 @@ if os.getenv("PDF2ZH_DEMO"):
         "First": [0],
         "First 20 pages": list(range(0, 20)),
     }
-    client_key = os.getenv("PDF2ZH_CLIENT_KEY")
-    server_key = os.getenv("PDF2ZH_SERVER_KEY")
+    client_key = ConfigManager.get("PDF2ZH_CLIENT_KEY")
+    server_key = ConfigManager.get("PDF2ZH_SERVER_KEY")
 
 
 # Public demo control
@@ -96,6 +99,38 @@ def verify_recaptcha(response):
     result = requests.post(recaptcha_url, data=data).json()
     print("reCAPTCHA", result.get("success"))
     return result.get("success")
+
+
+def download_with_limit(url: str, save_path: str, size_limit: int) -> str:
+    """
+    This function downloads a file from a URL and saves it to a specified path.
+
+    Inputs:
+        - url: The URL to download the file from
+        - save_path: The path to save the file to
+        - size_limit: The maximum size of the file to download
+
+    Returns:
+        - The path of the downloaded file
+    """
+    chunk_size = 1024
+    total_size = 0
+    with requests.get(url, stream=True, timeout=10) as response:
+        response.raise_for_status()
+        content = response.headers.get("Content-Disposition")
+        try:  # filename from header
+            _, params = cgi.parse_header(content)
+            filename = params["filename"]
+        except Exception:  # filename from url
+            filename = os.path.basename(url)
+        with open(save_path / filename, "wb") as file:
+            for chunk in response.iter_content(chunk_size=chunk_size):
+                total_size += len(chunk)
+                if size_limit and total_size > size_limit:
+                    raise gr.Error("Exceeds file size limit")
+                file.write(chunk)
+    return save_path / filename
+
 
 def stop_translate_file(state: dict) -> None:
     """
@@ -115,7 +150,8 @@ def stop_translate_file(state: dict) -> None:
 
 def translate_file(
     file_type,
-    file_input, 
+    file_input,
+    link_input,
     service,
     lang_from,
     lang_to,
@@ -162,15 +198,28 @@ def translate_file(
     if flag_demo and not verify_recaptcha(recaptcha_response):
         raise gr.Error("reCAPTCHA fail")
     
+    
+    start_time = time.time()
+
     start_time = time.time()
     progress(0, desc="Starting translation...")
 
     output = Path("pdf2zh_files")
     output.mkdir(parents=True, exist_ok=True)
 
-    if not file_input:
-        raise gr.Error("No input")
-    file_path = shutil.copy(file_input, output)
+    start_time = time.time()
+    if file_type == "File":
+        if not file_input:
+            raise gr.Error("No input")
+        file_path = shutil.copy(file_input, output)
+    else:
+        if not link_input:
+            raise gr.Error("No input")
+        file_path = download_with_limit(
+            link_input,
+            output,
+            20 * 1024 * 1024 if flag_demo else None,
+        )
 
     filename = os.path.splitext(os.path.basename(file_path))[0]
     file_raw = output / f"{filename}.pdf"
@@ -193,7 +242,6 @@ def translate_file(
 
     _envs = {}
     for i, env in enumerate(translator.envs.items()):
-        print(f"Env: {env[0]}, envs[i]: {envs[i]},")
         _envs[env[0]] = envs[i]
 
     print(f"Files before translation: {os.listdir(output)}")
@@ -217,8 +265,8 @@ def translate_file(
         "callback": progress_bar,
         "cancellation_event": cancellation_event_map[session_id],
         "envs": _envs,
-        "prompt": prompt,
-        "model": model,
+        "prompt": Template(prompt) if prompt else None,
+        "model": ModelInstance.value,
     }
     try:
         translate(**param)
@@ -324,7 +372,7 @@ with gr.Blocks(
         with gr.Column(scale=1):
             gr.Markdown("## File | < 5 MB" if flag_demo else "## File")
             file_type = gr.Radio(
-                choices=["File"],
+                choices=["File", "Link"],
                 label="Type",
                 value="File",
             )
@@ -334,6 +382,11 @@ with gr.Blocks(
                 file_types=[".pdf"],
                 type="filepath",
                 elem_classes=["input-file"],
+            )
+            link_input = gr.Textbox(
+                label="Link",
+                visible=False,
+                interactive=True,
             )
             gr.Markdown("## Option")
             service = gr.Dropdown(
@@ -353,12 +406,12 @@ with gr.Blocks(
                 lang_from = gr.Dropdown(
                     label="Translate from",
                     choices=lang_map.keys(),
-                    value="English",
+                    value=ConfigManager.get("PDF2ZH_LANG_FROM", "English"),
                 )
                 lang_to = gr.Dropdown(
                     label="Translate to",
                     choices=lang_map.keys(),
-                    value="Simplified Chinese",
+                    value=ConfigManager.get("PDF2ZH_LANG_TO", "Simplified Chinese"),
                 )
             page_range = gr.Radio(
                 choices=page_map.keys(),
@@ -375,7 +428,7 @@ with gr.Blocks(
             with gr.Accordion("Open for More Experimental Options!", open=False):
                 gr.Markdown("#### Experimental")
                 threads = gr.Textbox(
-                    label="number of threads", interactive=True, value="1"
+                    label="number of threads", interactive=True, value="4"
                 )
                 prompt = gr.Textbox(
                     label="Custom Prompt for llm", interactive=True, visible=False
@@ -389,11 +442,20 @@ with gr.Blocks(
                     _envs.append(gr.update(visible=False, value=""))
                 for i, env in enumerate(translator.envs.items()):
                     _envs[i] = gr.update(
-                        visible=False, label=env[0], value=os.getenv(env[0], env[1])
+                        visible=False,
+                        label=env[0],
+                        value=os.getenv(
+                            env[0], env[1]
+                        ),
                     )
-                    print(f"Env: {env[0]}, value: {os.getenv(env[0], env[1])},")
                 _envs[-1] = gr.update(visible=translator.CustomPrompt)
                 return _envs
+
+            def on_select_filetype(file_type):
+                return (
+                    gr.update(visible=file_type == "File"),
+                    gr.update(visible=file_type == "Link"),
+                )
 
             def on_select_page(choice):
                 if choice == "Others":
@@ -423,6 +485,26 @@ with gr.Blocks(
                 on_select_service,
                 service,
                 envs,
+            )
+            file_type.select(
+                on_select_filetype,
+                file_type,
+                [file_input, link_input],
+                js=(
+                    f"""
+                    (a,b)=>{{
+                        try{{
+                            grecaptcha.render('recaptcha-box',{{
+                                'sitekey':'{client_key}',
+                                'callback':'onVerify'
+                            }});
+                        }}catch(error){{}}
+                        return [a];
+                    }}
+                    """
+                    if flag_demo
+                    else ""
+                ),
             )
 
         with gr.Column(scale=2):
@@ -458,6 +540,7 @@ with gr.Blocks(
         inputs=[
             file_type,
             file_input,
+            link_input,
             service,
             lang_from,
             lang_to,
