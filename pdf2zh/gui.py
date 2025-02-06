@@ -3,6 +3,7 @@ import cgi
 import os
 import shutil
 import uuid
+import time
 from asyncio import CancelledError
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import requests
 import tqdm
 from gradio_pdf import PDF
 from string import Template
+from urllib.parse import urlparse
 
 from pdf2zh import __version__
 from pdf2zh.high_level import translate
@@ -45,24 +47,6 @@ from pdf2zh.translator import (
 service_map: dict[str, BaseTranslator] = {
     "Google": GoogleTranslator,
     "Bing": BingTranslator,
-    "DeepL": DeepLTranslator,
-    "DeepLX": DeepLXTranslator,
-    "Ollama": OllamaTranslator,
-    "Xinference": XinferenceTranslator,
-    "AzureOpenAI": AzureOpenAITranslator,
-    "OpenAI": OpenAITranslator,
-    "Zhipu": ZhipuTranslator,
-    "ModelScope": ModelScopeTranslator,
-    "Silicon": SiliconTranslator,
-    "Gemini": GeminiTranslator,
-    "Azure": AzureTranslator,
-    "Tencent": TencentTranslator,
-    "Dify": DifyTranslator,
-    "AnythingLLM": AnythingLLMTranslator,
-    "Argos Translate": ArgosTranslator,
-    "Gork": GorkTranslator,
-    "Groq": GroqTranslator,
-    "DeepSeek": DeepseekTranslator,
     "OpenAI-liked": OpenAIlikedTranslator,
 }
 
@@ -117,6 +101,13 @@ def verify_recaptcha(response):
     print("reCAPTCHA", result.get("success"))
     return result.get("success")
 
+def convert_cool_url_to_arxiv(original_url):
+    """将 papers.cool 的 arXiv URL 转换为 arXiv 官方 PDF 链接"""
+    if "papers.cool/arxiv" not in original_url:
+        return original_url
+    parsed = urlparse(original_url)
+    arxiv_id = parsed.path.strip('/').split('/')[-1]
+    return f"https://arxiv.org/pdf/{arxiv_id}"
 
 def download_with_limit(url: str, save_path: str, size_limit: int) -> str:
     """
@@ -132,6 +123,9 @@ def download_with_limit(url: str, save_path: str, size_limit: int) -> str:
     """
     chunk_size = 1024
     total_size = 0
+    original_url = url
+    url = convert_cool_url_to_arxiv(original_url)
+    print(f"Downloading pdf origin url({original_url}) url({url}) to {save_path}")
     with requests.get(url, stream=True, timeout=10) as response:
         response.raise_for_status()
         content = response.headers.get("Content-Disposition")
@@ -214,12 +208,17 @@ def translate_file(
     # Translate PDF content using selected service.
     if flag_demo and not verify_recaptcha(recaptcha_response):
         raise gr.Error("reCAPTCHA fail")
+    
+    
+    start_time = time.time()
 
+    start_time = time.time()
     progress(0, desc="Starting translation...")
 
     output = Path("pdf2zh_files")
     output.mkdir(parents=True, exist_ok=True)
 
+    start_time = time.time()
     if file_type == "File":
         if not file_input:
             raise gr.Error("No input")
@@ -230,7 +229,7 @@ def translate_file(
         file_path = download_with_limit(
             link_input,
             output,
-            5 * 1024 * 1024 if flag_demo else None,
+            20 * 1024 * 1024 if flag_demo else None,
         )
 
     filename = os.path.splitext(os.path.basename(file_path))[0]
@@ -291,6 +290,10 @@ def translate_file(
         raise gr.Error("No output")
 
     progress(1.0, desc="Translation complete!")
+
+    end_time = time.time()
+    cost_time = end_time - start_time
+    print(f"Translation took {cost_time:.2f} seconds.")
 
     return (
         str(file_mono),
@@ -355,8 +358,9 @@ demo_recaptcha = """
 
 tech_details_string = f"""
                     <summary>Technical details</summary>
-                    - GitHub: <a href="https://github.com/Byaidu/PDFMathTranslate">Byaidu/PDFMathTranslate</a><br>
-                    - GUI by: <a href="https://github.com/reycn">Rongxin</a><br>
+                    - GitHub: <a href="https://github.com/opensourceways/PDFMathTranslate">opensourceways/PDFMathTranslate</a><br>
+                    - 问题接口: <a>陶祎玮(t30073536)</a><br>
+                    - 建议反馈: <a>蒋龙(j00601018)</a><br>
                     - Version: {__version__}
                 """
 cancellation_event_map = {}
@@ -372,7 +376,7 @@ with gr.Blocks(
     head=demo_recaptcha if flag_demo else "",
 ) as demo:
     gr.Markdown(
-        "# [PDFMathTranslate @ GitHub](https://github.com/Byaidu/PDFMathTranslate)"
+        "# [在线pdf论文翻译工具](https://github.com/opensourceways/PDFMathTranslate)"
     )
 
     with gr.Row():
@@ -449,10 +453,10 @@ with gr.Blocks(
                     _envs.append(gr.update(visible=False, value=""))
                 for i, env in enumerate(translator.envs.items()):
                     _envs[i] = gr.update(
-                        visible=True,
+                        visible=False,
                         label=env[0],
-                        value=ConfigManager.get_env_by_translatername(
-                            translator, env[0], env[1]
+                        value=os.getenv(
+                            env[0], env[1]
                         ),
                     )
                 _envs[-1] = gr.update(visible=translator.CustomPrompt)
